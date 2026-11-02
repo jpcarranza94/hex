@@ -159,7 +159,25 @@ response_format=json -> reply `text`, trimmed
 ```
 
 Observed: the request shape against `mlx_audio.server` with
-`mlx-community/parakeet-tdt-0.6b-v3` (curl, 0.44 s and 4 s clips). Not
-observed in the app yet: a dictation on the remote server end to end.
+`mlx-community/parakeet-tdt-0.6b-v3` (curl, 0.44 s and 4 s clips), and 8
+dictations end to end from a MacBook Pro (Hex Test, 2026-11-02): 145–400 ms
+from release to text for short clips, 2.0 s for a 69 s clip.
+
+The same kind of server can do the rewrite instead of OpenCode, on every OS.
+
+```ts
+settings.json remote_cleanup                          // transcription::remote::chat
+├── url      the whole endpoint: https://<host>/v1/chat/completions
+├── model    sent as `model`; replaces the mode's OpenCode model
+└── api_key  optional, as above
+Mode with "OpenCode transformation" on (the switch is enabled while a URL is
+set, with or without OpenCode) -> processor::generate_cancellable
+├── The prompt OpenCode would get, as the only user message; max_tokens 4096
+├── Reply: the first choice's text, trimmed
+├── The mode's deadline bounds it; cancellation is not observed mid-request
+└── A failure, or a reply cut at max_tokens -> the corrected transcript is
+    pasted, as when OpenCode fails
+Meeting notes (processor::generate_text) go to the same server
+```
 
 Checks: `transcription::remote::tests`.

@@ -1,9 +1,13 @@
-//! A transcription server of the user's own: the finished 16 kHz clip goes
-//! as a WAV to the OpenAI-compatible `/v1/audio/transcriptions` URL in
-//! `settings.json` (`remote_transcription`), and the reply's `text` comes
-//! back. Nothing loads on this computer, nothing streams, and there are no
-//! word timings. Speech model "Remote server" is offered only while a URL
-//! is set, and only on macOS, where `Transcriber` can run it (#603).
+//! Servers of the user's own, both OpenAI-compatible, named in `settings.json`.
+//!
+//! - `remote_transcription`: the finished 16 kHz clip goes as a WAV to
+//!   `/v1/audio/transcriptions`, and the reply's `text` comes back. Nothing
+//!   loads on this computer, nothing streams, and there are no word timings.
+//!   Speech model "Remote server" is offered only while a URL is set, and
+//!   only on macOS, where `Transcriber` can run it (#603).
+//! - `remote_cleanup`: OpenCode rewrites (modes, meeting notes) go to
+//!   `/v1/chat/completions` instead, with the prompt as the only user
+//!   message, as OpenCode sends it. OpenCode does not need to run.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
 
 use std::sync::RwLock;
@@ -12,10 +16,10 @@ use std::time::Duration;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use serde::{Deserialize, Serialize};
 
-/// `settings.json`'s `remote_transcription`.
+/// `settings.json`'s `remote_transcription` or `remote_cleanup`.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
-pub struct RemoteTranscription {
+pub struct RemoteServer {
     /// The whole endpoint, for example
     /// `https://server.example.ts.net/v1/audio/transcriptions`.
     pub url: String,
@@ -26,20 +30,29 @@ pub struct RemoteTranscription {
     pub api_key: Option<String>,
 }
 
-static CONFIGURED: RwLock<Option<RemoteTranscription>> = RwLock::new(None);
+static TRANSCRIPTION: RwLock<Option<RemoteServer>> = RwLock::new(None);
+static CLEANUP: RwLock<Option<RemoteServer>> = RwLock::new(None);
 
-/// Publishes the saved server, as settings apply; one without a URL is none.
-pub fn set_configured(server: Option<&RemoteTranscription>) {
-    *CONFIGURED
-        .write()
-        .unwrap_or_else(|error| error.into_inner()) = server
-        .filter(|server| !server.url.trim().is_empty())
-        .cloned();
+/// Publishes the saved servers, as settings apply; one without a URL is none.
+pub fn set_configured(transcription: Option<&RemoteServer>, cleanup: Option<&RemoteServer>) {
+    for (slot, server) in [(&TRANSCRIPTION, transcription), (&CLEANUP, cleanup)] {
+        *slot.write().unwrap_or_else(|error| error.into_inner()) = server
+            .filter(|server| !server.url.trim().is_empty())
+            .cloned();
+    }
 }
 
 /// The server clips go to, when one is set.
-pub fn configured() -> Option<RemoteTranscription> {
-    CONFIGURED
+pub fn configured() -> Option<RemoteServer> {
+    TRANSCRIPTION
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+}
+
+/// The server rewrites go to instead of OpenCode, when one is set.
+pub fn cleanup() -> Option<RemoteServer> {
+    CLEANUP
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .clone()
@@ -50,6 +63,11 @@ pub fn configured() -> Option<RemoteTranscription> {
 const DEADLINE: Duration = Duration::from_secs(30);
 
 const MAX_REPLY_BYTES: u64 = 1024 * 1024;
+
+/// The longest rewrite asked for. A reply cut at this length is an error, so
+/// the caller pastes the transcript instead of a truncated rewrite.
+// ponytail: fixed cap; size it from the prompt if a server rejects 4096.
+const MAX_REWRITE_TOKENS: u32 = 4096;
 
 const BOUNDARY: &str = "hex-remote-transcription-7f3a9c";
 
@@ -67,39 +85,67 @@ impl Remote {
     /// Transcribes normalized 16 kHz audio on the server.
     pub fn transcribe(&self, samples: &[f32]) -> Result<String> {
         let server = configured().ok_or_else(not_configured)?;
-        let host = url::Url::parse(&server.url)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned))
-            .unwrap_or_else(|| server.url.clone());
         let (content_type, body) = multipart(&server.model, &wav(samples)?);
-        let mut request = ureq::http::Request::builder()
-            .method("POST")
-            .uri(server.url.as_str())
-            .header("Content-Type", content_type);
-        if let Some(key) = server.api_key.as_deref().filter(|key| !key.is_empty()) {
-            request = request.header("Authorization", format!("Bearer {key}"));
-        }
-        let request = request
-            .body(body)
-            .map_err(|error| eyre!("remote_transcription.url is not a usable URL: {error}"))?;
-        let agent = crate::net::agent(&server.url, |config| config.timeout_global(Some(DEADLINE)));
-        let reach =
-            |error: ureq::Error| eyre!("Couldn't reach {host}: {}", crate::net::reason(&error));
-        let reply = agent
-            .run(request)
-            .map_err(reach)?
-            .body_mut()
-            .with_config()
-            .limit(MAX_REPLY_BYTES)
-            .read_to_vec()
-            .map_err(reach)?;
-        text(&reply).wrap_err_with(|| format!("{host} answered without a transcript"))
+        let reply = post(&server, &content_type, body, DEADLINE)?;
+        text(&reply).wrap_err_with(|| format!("{} answered without a transcript", host(&server)))
     }
 }
 
 #[cfg(target_os = "macos")]
 fn not_configured() -> color_eyre::Report {
     eyre!("Remote server has no URL: set remote_transcription.url in settings")
+}
+
+/// One rewrite on `server`: `prompt` as the only user message, and the first
+/// choice's text.
+// ponytail: the request does not watch for cancellation; `deadline` bounds it.
+pub fn chat(server: &RemoteServer, prompt: &str, deadline: Duration) -> Result<String> {
+    let body = chat_body(&server.model, prompt);
+    let reply = post(server, "application/json", body, deadline)?;
+    chat_text(&reply).wrap_err_with(|| format!("{} answered without a rewrite", host(server)))
+}
+
+/// One POST to `server` within `deadline`: the reply's body.
+fn post(
+    server: &RemoteServer,
+    content_type: &str,
+    body: Vec<u8>,
+    deadline: Duration,
+) -> Result<Vec<u8>> {
+    let mut request = ureq::http::Request::builder()
+        .method("POST")
+        .uri(server.url.as_str())
+        .header("Content-Type", content_type);
+    if let Some(key) = server.api_key.as_deref().filter(|key| !key.is_empty()) {
+        request = request.header("Authorization", format!("Bearer {key}"));
+    }
+    let request = request
+        .body(body)
+        .map_err(|error| eyre!("{} is not a usable URL: {error}", server.url))?;
+    let agent = crate::net::agent(&server.url, |config| config.timeout_global(Some(deadline)));
+    let reach = |error: ureq::Error| {
+        eyre!(
+            "Couldn't reach {}: {}",
+            host(server),
+            crate::net::reason(&error)
+        )
+    };
+    agent
+        .run(request)
+        .map_err(reach)?
+        .body_mut()
+        .with_config()
+        .limit(MAX_REPLY_BYTES)
+        .read_to_vec()
+        .map_err(reach)
+}
+
+/// The URL's host, for messages; the URL itself when it has none.
+fn host(server: &RemoteServer) -> String {
+    url::Url::parse(&server.url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| server.url.clone())
 }
 
 /// The clip as 16-bit 16 kHz mono WAV, which every server reads.
@@ -155,9 +201,49 @@ fn text(reply: &[u8]) -> Result<String> {
     Ok(reply.text.trim().to_owned())
 }
 
+/// The `/v1/chat/completions` request for one rewrite.
+fn chat_body(model: &str, prompt: &str) -> Vec<u8> {
+    let mut body = serde_json::json!({
+        "messages": [{ "role": "user", "content": prompt }],
+        "max_tokens": MAX_REWRITE_TOKENS,
+        "stream": false,
+    });
+    if !model.is_empty() {
+        body["model"] = model.into();
+    }
+    body.to_string().into_bytes()
+}
+
+/// The first choice's text, trimmed; a reply cut at `max_tokens` is an error.
+fn chat_text(reply: &[u8]) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Reply {
+        choices: Vec<Choice>,
+    }
+    #[derive(Deserialize)]
+    struct Choice {
+        message: Message,
+        finish_reason: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Message {
+        content: String,
+    }
+    let reply: Reply = serde_json::from_slice(reply)?;
+    let choice = reply
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| eyre!("the reply has no choices"))?;
+    if choice.finish_reason.as_deref() == Some("length") {
+        return Err(eyre!("the rewrite stopped at {MAX_REWRITE_TOKENS} tokens"));
+    }
+    Ok(choice.message.content.trim().to_owned())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BOUNDARY, multipart, text, wav};
+    use super::{BOUNDARY, chat_body, chat_text, multipart, text, wav};
 
     #[test]
     fn the_request_carries_the_model_format_and_wav() {
@@ -188,5 +274,25 @@ mod tests {
             "Hello there."
         );
         assert!(text(br#"{"error":"no"}"#).is_err());
+    }
+
+    #[test]
+    fn a_rewrite_sends_the_prompt_alone_and_reads_the_first_choice() {
+        let body: serde_json::Value =
+            serde_json::from_slice(&chat_body("qwen", "Rewrite: um hi")).unwrap();
+        assert_eq!(body["model"], "qwen");
+        assert_eq!(body["stream"], false);
+        assert_eq!(
+            body["messages"],
+            serde_json::json!([{ "role": "user", "content": "Rewrite: um hi" }])
+        );
+        let without_model: serde_json::Value = serde_json::from_slice(&chat_body("", "x")).unwrap();
+        assert!(without_model.get("model").is_none());
+
+        let reply = br#"{"choices":[{"message":{"role":"assistant","content":" Hi. "},"finish_reason":"stop"}]}"#;
+        assert_eq!(chat_text(reply).unwrap(), "Hi.");
+        let cut = br#"{"choices":[{"message":{"content":"Hi and"},"finish_reason":"length"}]}"#;
+        assert!(chat_text(cut).is_err());
+        assert!(chat_text(br#"{"choices":[]}"#).is_err());
     }
 }

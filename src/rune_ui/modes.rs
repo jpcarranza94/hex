@@ -1089,7 +1089,8 @@ fn processing(
         return section(p, "processing", tr("Processing"), vec![row]);
     }
     let enabled = current.post_processing.enabled;
-    let can_toggle = enabled || ui.models.available();
+    let can_toggle =
+        enabled || ui.models.available() || crate::transcription::remote::cleanup().is_some();
     let toggle = Switch::new(enabled)
         .disabled(!can_toggle)
         .on_toggle(|ui: &mut Ui| {

@@ -242,6 +242,11 @@ const KEYS: &[Key] = &[
         Kind::Json,
         "Speech model Remote server's OpenAI-compatible endpoint (macOS): {\"url\": \"https://…/v1/audio/transcriptions\", \"model\": \"…\", \"api_key\": \"…\"}",
     ),
+    optional(
+        "remote_cleanup",
+        Kind::Json,
+        "OpenAI-compatible endpoint that rewrites instead of OpenCode: {\"url\": \"https://…/v1/chat/completions\", \"model\": \"…\", \"api_key\": \"…\"}",
+    ),
     key(
         "vocabulary_boost",
         Kind::Choice(&["off", "light", "normal", "strong"]),

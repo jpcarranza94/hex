@@ -1572,7 +1572,9 @@ mod tests {
             .filter(|model| model.streams)
             .map(|model| match model.runtime {
                 ModelRuntime::Gguf(artifact) => artifact.variant,
-                ModelRuntime::AppleSpeech => panic!("a streaming model has a GGUF artifact"),
+                ModelRuntime::AppleSpeech | ModelRuntime::Remote => {
+                    panic!("a streaming model has a GGUF artifact")
+                }
             })
             .collect::<Vec<_>>();
         assert_eq!(

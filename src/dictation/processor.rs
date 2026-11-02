@@ -888,6 +888,11 @@ fn generate_cancellable(
     if crate::policy::Policy::current().locks(lock) {
         return Err(eyre!(lock.refusal()));
     }
+    // A server of the user's own replaces OpenCode, and its own model setting
+    // replaces the mode's OpenCode model.
+    if let Some(server) = crate::transcription::remote::cleanup() {
+        return crate::transcription::remote::chat(&server, prompt, deadline);
+    }
     let service =
         crate::desktop::opencode_service::find().map_err(|missing| eyre!(missing.message()))?;
     generate_with_candidates(

@@ -1795,7 +1795,9 @@ pub struct AppSettings {
     pub transcription_device: TranscriptionDevice,
     pub transcription_recents: Vec<TranscriptionSelection>,
     /// The server behind speech model "Remote server" (macOS).
-    pub remote_transcription: Option<crate::transcription::remote::RemoteTranscription>,
+    pub remote_transcription: Option<crate::transcription::remote::RemoteServer>,
+    /// The server that rewrites instead of OpenCode.
+    pub remote_cleanup: Option<crate::transcription::remote::RemoteServer>,
     pub keyboard_model_switching: KeyboardModelSwitching,
     pub dictation_processing: DictationProcessingSettings,
     /// Retired Voice Action settings, kept untouched in `settings.json`.
@@ -1926,6 +1928,7 @@ impl Default for AppSettings {
             transcription_device: TranscriptionDevice::Auto,
             transcription_recents: Vec::new(),
             remote_transcription: None,
+            remote_cleanup: None,
             keyboard_model_switching: KeyboardModelSwitching::default(),
             dictation_processing: DictationProcessingSettings::default(),
             retired_voice_action: None,
@@ -2319,7 +2322,10 @@ impl AppSettings {
             .write()
             .unwrap_or_else(|error| error.into_inner()) = self.runtime_hotkeys();
         // Before the selection: "Remote server" runs only while it has a URL.
-        crate::transcription::remote::set_configured(self.remote_transcription.as_ref());
+        crate::transcription::remote::set_configured(
+            self.remote_transcription.as_ref(),
+            self.remote_cleanup.as_ref(),
+        );
         // An import that can't run stays saved; the listener runs the
         // default model until it is fixed.
         set_transcription_selection(&crate::transcription::custom_models::runnable(
