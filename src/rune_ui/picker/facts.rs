@@ -207,7 +207,7 @@ pub(super) fn to_download(entry: &Entry) -> u64 {
 pub(super) fn size_text(def: &ModelDefinition) -> String {
     match def.runtime {
         ModelRuntime::AppleSpeech => tr("Managed by macOS").into(),
-        ModelRuntime::Gguf(_) => def.size_label(),
+        ModelRuntime::Gguf(_) | ModelRuntime::Remote => def.size_label(),
     }
 }
 
@@ -246,7 +246,7 @@ pub(super) fn blurb(def: &ModelDefinition) -> &'static str {
         M::Nemotron35Asr => tr("Writes while you talk, in 27 languages"),
         M::GigaAmV3 => tr("Russian, with punctuation. A small download"),
         M::AppleSpeech => tr("Apple's speech recognition, kept up to date by macOS"),
-        M::Custom(_) => "",
+        M::Remote | M::Custom(_) => "",
     }
 }
 

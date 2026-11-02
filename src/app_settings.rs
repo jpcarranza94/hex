@@ -1794,6 +1794,8 @@ pub struct AppSettings {
     /// Where the speech model runs (Linux and Windows).
     pub transcription_device: TranscriptionDevice,
     pub transcription_recents: Vec<TranscriptionSelection>,
+    /// The server behind speech model "Remote server" (macOS).
+    pub remote_transcription: Option<crate::transcription::remote::RemoteTranscription>,
     pub keyboard_model_switching: KeyboardModelSwitching,
     pub dictation_processing: DictationProcessingSettings,
     /// Retired Voice Action settings, kept untouched in `settings.json`.
@@ -1923,6 +1925,7 @@ impl Default for AppSettings {
             transcription: default_transcription(),
             transcription_device: TranscriptionDevice::Auto,
             transcription_recents: Vec::new(),
+            remote_transcription: None,
             keyboard_model_switching: KeyboardModelSwitching::default(),
             dictation_processing: DictationProcessingSettings::default(),
             retired_voice_action: None,
@@ -1982,7 +1985,8 @@ impl KeyboardModelChoice {
         let model = crate::transcription::models::validate(&selection)?;
         match model.runtime {
             crate::transcription::models::ModelRuntime::Gguf(_) => Ok(()),
-            crate::transcription::models::ModelRuntime::AppleSpeech => {
+            crate::transcription::models::ModelRuntime::AppleSpeech
+            | crate::transcription::models::ModelRuntime::Remote => {
                 Err(eyre!("{} can't be switched to by input source", model.name))
             }
         }
@@ -2314,6 +2318,8 @@ impl AppSettings {
             .get_or_init(Default::default)
             .write()
             .unwrap_or_else(|error| error.into_inner()) = self.runtime_hotkeys();
+        // Before the selection: "Remote server" runs only while it has a URL.
+        crate::transcription::remote::set_configured(self.remote_transcription.as_ref());
         // An import that can't run stays saved; the listener runs the
         // default model until it is fixed.
         set_transcription_selection(&crate::transcription::custom_models::runnable(

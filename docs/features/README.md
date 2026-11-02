@@ -43,8 +43,8 @@ Traditional Chinese is drafted from the Simplified strings by a character and
 Taiwan-usage phrase converter (`desktop/i18n/traditional_chinese.rs`), not yet
 reviewed by a native speaker.
 The [vocabulary](vocabulary.md) biases transcription toward names you list.
-[Your own speech models](own-models.md) covers adding a GGUF file and using
-models another app already downloaded.
+[Your own speech models](own-models.md) covers adding a GGUF file, using
+models another app already downloaded, and a remote server of your own (macOS).
 [Annotate](capture.md) (macOS, Linux,
 and Windows) records the screen while you draw and talk and sends it to an agent.
 The other capabilities stay here until they need their own verification recipe.

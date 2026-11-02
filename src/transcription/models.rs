@@ -47,6 +47,8 @@ pub enum TranscriptionModelId {
     Nemotron35Asr,
     GigaAmV3,
     AppleSpeech,
+    /// The user's own OpenAI-compatible server (`super::remote`).
+    Remote,
     Custom(CustomModelId),
 }
 
@@ -81,6 +83,7 @@ impl TranscriptionModelId {
             Self::Nemotron35Asr => "nemotron_3_5_asr",
             Self::GigaAmV3 => "gigaam_v3",
             Self::AppleSpeech => "apple_speech",
+            Self::Remote => "remote",
             Self::Custom(id) => id.as_str(),
         }
     }
@@ -89,11 +92,12 @@ impl TranscriptionModelId {
         matches!(self, Self::Custom(_))
     }
 
-    /// A model behind its own Labs toggle: an import, or Parakeet Ultra. A
-    /// saved choice of one stays saved while it can't run, and the listener
-    /// runs a fallback (`custom_models::runnable`).
+    /// A model behind its own Labs toggle: an import, or Parakeet Ultra; or
+    /// the remote server, behind its URL. A saved choice of one stays saved
+    /// while it can't run, and the listener runs a fallback
+    /// (`custom_models::runnable`).
     pub const fn is_labs_gated(self) -> bool {
-        matches!(self, Self::Custom(_) | Self::ParakeetUltra)
+        matches!(self, Self::Custom(_) | Self::ParakeetUltra | Self::Remote)
     }
 }
 
@@ -117,6 +121,7 @@ impl FromStr for TranscriptionModelId {
             "nemotron_3_5_asr" => Ok(Self::Nemotron35Asr),
             "gigaam_v3" => Ok(Self::GigaAmV3),
             "apple_speech" => Ok(Self::AppleSpeech),
+            "remote" => Ok(Self::Remote),
             _ => CustomModelId::parse(value)
                 .map(Self::Custom)
                 .ok_or_else(|| eyre!("unknown transcription model: {value}")),
@@ -216,6 +221,8 @@ pub enum VocabularyUse {
 pub enum ModelRuntime {
     Gguf(&'static GgufArtifact),
     AppleSpeech,
+    /// A clip sent to `remote_transcription.url`; nothing to download.
+    Remote,
 }
 
 pub struct GgufArtifact {
@@ -242,6 +249,9 @@ impl ModelDefinition {
     pub fn available(&self) -> bool {
         match (self.runtime, self.id) {
             (ModelRuntime::AppleSpeech, _) => false,
+            (ModelRuntime::Remote, _) => {
+                cfg!(target_os = "macos") && super::remote::configured().is_some()
+            }
             (ModelRuntime::Gguf(_), TranscriptionModelId::Custom(id)) => {
                 super::custom_models::usable(id)
             }
@@ -318,6 +328,7 @@ impl ModelDefinition {
     pub fn size_label(&self) -> String {
         match self.runtime {
             ModelRuntime::AppleSpeech => "Managed".into(),
+            ModelRuntime::Remote => "No download".into(),
             ModelRuntime::Gguf(artifact) if artifact.bytes >= 1_000_000_000 => {
                 format!("{:.1} GB", artifact.bytes as f64 / 1_000_000_000.0)
             }
@@ -349,7 +360,7 @@ impl ModelDefinition {
     pub const fn download_bytes(&self) -> Option<u64> {
         match self.runtime {
             ModelRuntime::Gguf(artifact) => Some(artifact.bytes),
-            ModelRuntime::AppleSpeech => None,
+            ModelRuntime::AppleSpeech | ModelRuntime::Remote => None,
         }
     }
 }
@@ -561,6 +572,18 @@ pub const MODELS: &[ModelDefinition] = &[
         languages: &["*"],
         accepts_language_hint: true,
         supports_language_detection: false,
+    },
+    ModelDefinition {
+        id: TranscriptionModelId::Remote,
+        name: "Remote server",
+        realtime: "Your server",
+        word_error_rate: None,
+        streams: false,
+        runtime: ModelRuntime::Remote,
+        languages: &["*"],
+        // Only the clip is sent; the server hears the language itself.
+        accepts_language_hint: false,
+        supports_language_detection: true,
     },
 ];
 
@@ -814,6 +837,7 @@ pub fn is_installed(model: &ModelDefinition, language: &str) -> bool {
         ModelRuntime::AppleSpeech => crate::apple_speech::AppleSpeech::is_ready(language),
         #[cfg(not(target_os = "macos"))]
         ModelRuntime::AppleSpeech => false,
+        ModelRuntime::Remote => model.available(),
     }
 }
 

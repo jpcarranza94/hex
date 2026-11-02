@@ -25,6 +25,7 @@ pub(crate) mod models;
 pub(crate) mod pause_segmenter;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(crate) mod preparation;
+pub(crate) mod remote;
 pub(crate) mod service;
 pub(crate) mod speech_detector;
 pub(crate) mod stream;
@@ -42,6 +43,8 @@ use crate::transcription::models::{
     ModelRuntime, TranscriptionModelId, TranscriptionSelection, validate,
 };
 #[cfg(target_os = "macos")]
+use crate::transcription::remote::Remote;
+#[cfg(target_os = "macos")]
 pub use crate::transcription::transcript::{Transcript, TranscriptSegment};
 
 /// Silence after a Unified English clip (400 ms at 16 kHz), so the model
@@ -54,6 +57,7 @@ pub(crate) const UNIFIED_ENGLISH_TRAILING_SILENCE_SAMPLES: usize = 6_400;
 pub enum Transcriber {
     Gguf(Box<Parakeet>),
     AppleSpeech(AppleSpeech),
+    Remote(Remote),
 }
 
 #[cfg(target_os = "macos")]
@@ -75,6 +79,7 @@ impl Transcriber {
                 .map(Box::new)
                 .map(Self::Gguf),
             ModelRuntime::AppleSpeech => AppleSpeech::load(selection).map(Self::AppleSpeech),
+            ModelRuntime::Remote => Remote::load().map(Self::Remote),
         }
     }
 
@@ -82,15 +87,17 @@ impl Transcriber {
         match self {
             Self::Gguf(model) => model.matches_selection(selection),
             Self::AppleSpeech(model) => model.matches_selection(selection),
+            Self::Remote(_) => selection.model == TranscriptionModelId::Remote,
         }
     }
 
     /// Brings an idle GGUF model's weights back before audio arrives (see
-    /// [`Parakeet::prewarm`]). Apple Speech has no weights of Hex's to warm.
+    /// [`Parakeet::prewarm`]). Apple Speech and a remote server have no
+    /// weights of Hex's to warm.
     pub fn prewarm(&mut self) -> Result<()> {
         match self {
             Self::Gguf(model) => model.prewarm(),
-            Self::AppleSpeech(_) => Ok(()),
+            Self::AppleSpeech(_) | Self::Remote(_) => Ok(()),
         }
     }
 
@@ -103,6 +110,7 @@ impl Transcriber {
                 model.transcribe(&samples)
             }
             Self::AppleSpeech(model) => model.transcribe(&samples).map(|result| result.text),
+            Self::Remote(model) => model.transcribe(&samples),
         }
     }
 
@@ -137,6 +145,11 @@ impl Transcriber {
                     })
             }
             Self::AppleSpeech(model) => model.transcribe(&samples),
+            // No timings: meetings keep the chunk as one untimed entry.
+            Self::Remote(model) => model.transcribe(&samples).map(|text| Transcript {
+                text,
+                ..Transcript::default()
+            }),
         }
     }
 }

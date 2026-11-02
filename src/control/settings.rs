@@ -237,6 +237,11 @@ const KEYS: &[Key] = &[
         "Recently used models, each with its language",
         "Hex records these as you switch models",
     ),
+    optional(
+        "remote_transcription",
+        Kind::Json,
+        "Speech model Remote server's OpenAI-compatible endpoint (macOS): {\"url\": \"https://…/v1/audio/transcriptions\", \"model\": \"…\", \"api_key\": \"…\"}",
+    ),
     key(
         "vocabulary_boost",
         Kind::Choice(&["off", "light", "normal", "strong"]),

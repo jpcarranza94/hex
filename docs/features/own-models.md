@@ -131,3 +131,35 @@ in-place use and forgetting, the full check refusing a mismatched file),
 `rune-onboarding-model-found-downloading-light`,
 `rune-onboarding-model-found-recommended-light`, and
 `rune-onboarding-model-found-back-light`.
+
+## A Server Of Your Own (Remote Server, macOS)
+
+Speech model "Remote server" sends each finished clip to an OpenAI-compatible
+`/v1/audio/transcriptions` endpoint you run, for example on another Mac over
+Tailscale, so this computer loads no speech model (#603). It is offered only
+while `remote_transcription.url` is set, and only on macOS.
+
+```ts
+settings.json remote_transcription                    // transcription::remote
+├── url      the whole endpoint: https://<host>/v1/audio/transcriptions
+├── model    sent as the `model` field (mlx-audio and OpenAI need it)
+└── api_key  optional, sent as `Authorization: Bearer`; kept in settings.json
+hex settings set remote_transcription '{"url": "…", "model": "…"}'
+├── Picker and menu bar list "Remote server"; no download, no Delete
+├── Setup counts it as ready, so no model downloads
+└── none clears it: a saved "remote" choice stays saved, and the listener runs
+    the downloaded fallback model until a URL is set (custom_models::runnable)
+Release -> the whole clip as 16 kHz mono WAV, multipart with model and
+response_format=json -> reply `text`, trimmed
+├── Same queue as local models: one clip at a time, in order
+├── 30 s deadline per clip; a failure fails that dictation with
+│   "Couldn't reach <host>: <reason>" and nothing falls back
+└── No Live text or streaming, no word timings (a meeting chunk is one
+    untimed entry), no vocabulary biasing, no language hint
+```
+
+Observed: the request shape against `mlx_audio.server` with
+`mlx-community/parakeet-tdt-0.6b-v3` (curl, 0.44 s and 4 s clips). Not
+observed in the app yet: a dictation on the remote server end to end.
+
+Checks: `transcription::remote::tests`.

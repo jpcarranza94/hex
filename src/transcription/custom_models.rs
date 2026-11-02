@@ -418,7 +418,7 @@ pub fn imported() -> Vec<Imported> {
             definition: entry.definition,
             architecture: match entry.definition.runtime {
                 ModelRuntime::Gguf(artifact) => artifact.architecture,
-                ModelRuntime::AppleSpeech => "",
+                ModelRuntime::AppleSpeech | ModelRuntime::Remote => "",
             },
             sha256: entry.manifest.sha256.clone(),
             source: entry.manifest.source.clone(),

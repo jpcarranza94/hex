@@ -725,13 +725,20 @@ pub struct ModelInfo {
 }
 
 /// Where `model`'s file is or comes from, as `hex model list` and the local
-/// API say it: `found: owner/name@abcdef1`, `imported`, `hex`, or `download`.
+/// API say it: `found: owner/name@abcdef1`, `imported`, `hex`, `download`,
+/// or `remote`.
 pub fn model_source(
     model: &crate::transcription::models::ModelDefinition,
     language: &str,
 ) -> String {
     use crate::transcription::found_models::describe;
     use crate::transcription::models::{is_installed, model_path};
+    if matches!(
+        model.runtime,
+        crate::transcription::models::ModelRuntime::Remote
+    ) {
+        return "remote".into();
+    }
     let installed = is_installed(model, language);
     let here = model_path(model)
         .ok()
